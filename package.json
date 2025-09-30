@@ -1,6 +1,6 @@
 {
   "name": "vite-plugin-ops",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Vite plugin to organize build outputs and vendor chunking.",
   "type": "module",
   "license": "MIT",
@@ -26,9 +26,9 @@
 
   "keywords": ["vite", "vite-plugin", "rollup", "chunks", "vendor", "build"],
 
-  "repository": { "type": "git", "url": "git+https://github.com/you/vite-plugin-ops.git" },
-  "bugs": { "url": "https://github.com/you/vite-plugin-ops/issues" },
-  "homepage": "https://github.com/you/vite-plugin-ops#readme",
+  "repository": { "type": "git", "url": "git+https://github.com/suileyan/vite-plugin-ops.git" },
+  "bugs": { "url": "https://github.com/suileyan/vite-plugin-ops/issues" },
+  "homepage": "https://github.com/suileyan/vite-plugin-ops#readme",
 
   "peerDependencies": {
     "vite": "^5.0.0 || ^6.0.0 || ^7.0.0"
