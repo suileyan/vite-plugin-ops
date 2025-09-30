@@ -3,47 +3,54 @@
   "version": "0.1.0",
   "description": "Vite plugin to organize build outputs and vendor chunking.",
   "type": "module",
-  "main": "dist/index.cjs",
-  "module": "dist/index.js",
-  "types": "dist/index.d.ts",
+  "license": "MIT",
+  "author": "suileyan",
+
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "require": "./dist/index.cjs"
-    }
+    },
+    "./package.json": "./package.json"
   },
-  "files": [
-    "dist"
-  ],
+  "main": "dist/index.cjs",
+  "types": "dist/index.d.ts",
+
+  "files": ["dist", "README.md", "LICENSE"],
+
   "sideEffects": false,
   "engines": {
-    "node": ">=16"
+    "node": ">=20.19"
   },
-  "scripts": {
-    "build": "tsup src/index.ts --dts --format esm,cjs --sourcemap --clean",
-    "dev": "tsup src/index.ts --watch --sourcemap",
-    "clean": "rimraf dist || rmdir /s /q dist",
-    "prepare": "npm run build"
-  },
-  "keywords": [
-    "vite",
-    "vite-plugin",
-    "rollup",
-    "chunks",
-    "vendor",
-    "build"
-  ],
-  "author": "suileyan",
-  "license": "MIT",
+
+  "keywords": ["vite", "vite-plugin", "rollup", "chunks", "vendor", "build"],
+
+  "repository": { "type": "git", "url": "git+https://github.com/you/vite-plugin-ops.git" },
+  "bugs": { "url": "https://github.com/you/vite-plugin-ops/issues" },
+  "homepage": "https://github.com/you/vite-plugin-ops#readme",
+
   "peerDependencies": {
-    "vite": ">=4 <6"
+    "vite": "^5.0.0 || ^6.0.0 || ^7.0.0"
   },
   "devDependencies": {
     "@types/node": "^24.6.0",
     "rimraf": "^6.0.1",
     "tsup": "^8.5.0",
     "typescript": "^5.9.2",
-    "vite": "^7.1.7"
+    "vite": "^7.1.7",
+    "rollup": "^4.0.0"
+  },
+
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch --sourcemap",
+    "clean": "rimraf dist || rmdir /s /q dist",
+    "prepublishOnly": "npm run clean && npm run build"
+  },
+
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
   }
 }
