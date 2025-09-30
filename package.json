@@ -1,0 +1,49 @@
+{
+  "name": "vite-plugin-ops",
+  "version": "0.1.0",
+  "description": "Vite plugin to organize build outputs and vendor chunking.",
+  "type": "module",
+  "main": "dist/index.cjs",
+  "module": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=16"
+  },
+  "scripts": {
+    "build": "tsup src/index.ts --dts --format esm,cjs --sourcemap --clean",
+    "dev": "tsup src/index.ts --watch --sourcemap",
+    "clean": "rimraf dist || rmdir /s /q dist",
+    "prepare": "npm run build"
+  },
+  "keywords": [
+    "vite",
+    "vite-plugin",
+    "rollup",
+    "chunks",
+    "vendor",
+    "build"
+  ],
+  "author": "suileyan",
+  "license": "MIT",
+  "peerDependencies": {
+    "vite": ">=4 <6"
+  },
+  "devDependencies": {
+    "@types/node": "^24.6.0",
+    "rimraf": "^6.0.1",
+    "tsup": "^8.5.0",
+    "typescript": "^5.9.2",
+    "vite": "^7.1.7"
+  }
+}
