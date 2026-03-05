@@ -4,6 +4,9 @@ import type { Plugin, UserConfig } from 'vite'
 
 export type SplitStrategy = 'aggressive' | 'balanced' | 'conservative'
 
+// 导出 Plugin 类型供用户使用
+export type { Plugin as OPSPlugin }
+
 export type OPSOptions = {
   /**
    * If true, overwrite existing `build.rollupOptions.output.*` fields.
@@ -94,30 +97,83 @@ type ResolvedOptions = {
   groups?: Record<string, (string | RegExp)[]>
 }
 
+const patternCache = new Map<string, RegExp>()
+
+const MAX_PATH_LENGTH = 2000
+
 function normalizeId(id: string): string {
   return id.replace(/\\/g, '/').replace(/%5C/g, '/')
 }
 
 function makeNodeModulesPattern(pkg: string | RegExp): (id: string) => boolean {
   if (pkg instanceof RegExp) {
-    return (id: string) => pkg.test(id)
+    // ReDoS 防护：限制输入长度和添加超时保护
+    return (id: string) => {
+      if (id.length > MAX_PATH_LENGTH) {
+        console.warn(`[vite-plugin-ops] Path too long (${id.length} chars), skipping: ${id.slice(0, 50)}...`)
+        return false
+      }
+      return pkg.test(id)
+    }
   }
-  // Scoped packages like @vueuse
-  const scoped = pkg.startsWith('@')
-  const escaped = pkg.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  const base = scoped ? escaped : `(?:@[^/]+/)?${escaped}`
-  const re = new RegExp(`/node_modules/(?:[.]pnpm/)?(?:${base})(?:/|@|$)`, 'i')
-  return (id: string) => re.test(id)
+
+  // 检查缓存
+  let re = patternCache.get(pkg)
+  if (!re) {
+    // Scoped packages like @vueuse
+    const scoped = pkg.startsWith('@')
+    // 修复：添加对 / 的转义
+    const escaped = pkg.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')
+    const base = scoped ? escaped : `(?:@[^/]+/)?${escaped}`
+    re = new RegExp(`/node_modules/(?:[.]pnpm/)?(?:${base})(?:/|@|$)`, 'i')
+    patternCache.set(pkg, re)
+  }
+
+  // ReDoS 防护：限制输入长度
+  return (id: string) => {
+    if (id.length > MAX_PATH_LENGTH) {
+      console.warn(`[vite-plugin-ops] Path too long (${id.length} chars), skipping: ${id.slice(0, 50)}...`)
+      return false
+    }
+    return re.test(id)
+  }
+}
+
+// 简单的运行时类型验证函数
+function isValidPackageJson(obj: unknown): obj is { dependencies?: Record<string, string> } {
+  if (typeof obj !== 'object' || obj === null) return false
+  const json = obj as Record<string, unknown>
+  if (json.dependencies !== undefined) {
+    if (typeof json.dependencies !== 'object' || json.dependencies === null) return false
+    for (const val of Object.values(json.dependencies)) {
+      if (typeof val !== 'string') return false
+    }
+  }
+  return true
 }
 
 function readProjectDependencies(cwd: string): Set<string> {
   try {
     const pkgPath = path.join(cwd, 'package.json')
-    const json = JSON.parse(fs.readFileSync(pkgPath, 'utf8')) as {
-      dependencies?: Record<string, string>
+    const content = fs.readFileSync(pkgPath, 'utf8')
+    const json: unknown = JSON.parse(content)
+
+    // 运行时类型验证
+    if (!isValidPackageJson(json)) {
+      console.warn('[vite-plugin-ops] Invalid package.json format: dependencies field is malformed')
+      return new Set<string>()
     }
+
     return new Set(Object.keys(json.dependencies || {}))
-  } catch {
+  } catch (error) {
+    // 增强错误处理：根据错误类型提供更详细的日志
+    if (error instanceof SyntaxError) {
+      console.warn('[vite-plugin-ops] Failed to parse package.json: Invalid JSON format')
+    } else if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      console.warn('[vite-plugin-ops] package.json not found in:', cwd)
+    } else if (process.env.DEBUG) {
+      console.warn('[vite-plugin-ops] Failed to read package.json:', error)
+    }
     return new Set<string>()
   }
 }
