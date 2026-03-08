@@ -1,6 +1,6 @@
 {
   "name": "vite-plugin-ops",
-  "version": "0.1.2",
+  "version": "0.2.0-beta.1",
   "description": "Vite plugin to organize build outputs and vendor chunking.",
   "type": "module",
   "license": "MIT",
@@ -39,14 +39,18 @@
     "tsup": "^8.5.0",
     "typescript": "^5.9.2",
     "vite": "^7.3.1",
-    "rollup": "^4.0.0"
+    "rollup": "^4.0.0",
+    "vitest": "^3.0.0"
   },
 
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch --sourcemap",
     "clean": "rimraf dist || rmdir /s /q dist",
-    "prepublishOnly": "npm run clean && npm run build"
+    "prepublishOnly": "npm run clean && npm run build",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
   },
 
   "publishConfig": {

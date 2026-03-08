@@ -1,310 +1,14 @@
-import fs from 'node:fs'
-import path from 'node:path'
-import type { Plugin, UserConfig } from 'vite'
+import type { Plugin } from 'vite'
+import type { OPSOptions, ResolvedOptions, ManualChunksOption, AssetFileNamesOption, GroupMatcher } from './types'
+import { readProjectDependencies } from './deps'
+import { normalizeId, buildGroupMatchers } from './matcher'
 
-export type SplitStrategy = 'aggressive' | 'balanced' | 'conservative'
+export type { OPSPlugin, OPSOptions, SplitStrategy, ResolvedOptions, GroupMatcher } from './types'
 
-// 导出 Plugin 类型供用户使用
-export type { Plugin as OPSPlugin }
-
-export type OPSOptions = {
-  /**
-   * If true, overwrite existing `build.rollupOptions.output.*` fields.
-   * If false, only fill in fields that are not already provided by the user.
-   * Default: false
-   */
-  override?: boolean
-  /**
-   * Chunking strategy:
-   * - 'aggressive': Split almost all dependencies into separate chunks
-   * - 'balanced': Split large dependencies and common frameworks (default)
-   * - 'conservative': Minimal splitting, only very large dependencies
-   * Default: 'balanced'
-   */
-  strategy?: SplitStrategy
-  /**
-   * Minimum size (in KB) for a dependency to be split into its own chunk.
-   * Only applies when strategy is 'balanced' or 'conservative'.
-   * Default: 50
-   */
-  minSize?: number
-  /**
-   * Additional custom chunk groups. Keys are chunk names; values are string or RegExp
-   * matchers to detect a module path in node_modules. Example:
-   * { three: ['three'], lodash: [/node_modules\\/lodash(?!-)/] }
-   */
-  groups?: Record<string, (string | RegExp)[]>
-}
-
-type GroupMatcher = { name: string; test: (id: string) => boolean; priority: number }
-
-// Common large libraries that should typically be split
-const COMMON_LARGE_LIBS = {
-  // UI Frameworks
-  react: ['react', 'react-dom'],
-  vue: ['vue', '@vue/'],
-  angular: ['@angular/'],
-  svelte: ['svelte'],
-
-  // State Management
-  redux: ['redux', 'react-redux', '@reduxjs/toolkit'],
-  mobx: ['mobx', 'mobx-react'],
-  zustand: ['zustand'],
-  pinia: ['pinia'],
-
-  // Routing
-  'react-router': ['react-router', 'react-router-dom'],
-  'vue-router': ['vue-router'],
-
-  // UI Libraries
-  antd: ['antd', '@ant-design/'],
-  'element-plus': ['element-plus'],
-  'element-ui': ['element-ui'],
-  'naive-ui': ['naive-ui'],
-  'arco-design': ['@arco-design/'],
-  'material-ui': ['@mui/', '@material-ui/'],
-  chakra: ['@chakra-ui/'],
-
-  // Utility Libraries
-  lodash: ['lodash', 'lodash-es'],
-  moment: ['moment'],
-  dayjs: ['dayjs'],
-  axios: ['axios'],
-
-  // Rich Text / Charts
-  echarts: ['echarts'],
-  'd3': ['d3'],
-  'chart.js': ['chart.js'],
-  quill: ['quill'],
-
-  // 3D / Game
-  three: ['three'],
-  babylon: ['@babylonjs/'],
-}
-
-// Medium-sized libraries that should be grouped together
-const MEDIUM_LIB_GROUPS = {
-  'utils': ['@vueuse/', 'ahooks', 'react-use'],
-  'icons': ['@iconify/', '@ant-design/icons', '@heroicons/', 'lucide-react'],
-  'form': ['react-hook-form', 'formik', 'async-validator'],
-  'i18n': ['i18next', 'react-i18next', 'vue-i18n'],
-}
-
-type ResolvedOptions = {
-  override: boolean
-  strategy: SplitStrategy
-  minSize: number
-  groups?: Record<string, (string | RegExp)[]>
-}
-
-const patternCache = new Map<string, RegExp>()
-
-const MAX_PATH_LENGTH = 2000
-
-function normalizeId(id: string): string {
-  return id.replace(/\\/g, '/').replace(/%5C/g, '/')
-}
-
-function makeNodeModulesPattern(pkg: string | RegExp): (id: string) => boolean {
-  if (pkg instanceof RegExp) {
-    // ReDoS 防护：限制输入长度和添加超时保护
-    return (id: string) => {
-      if (id.length > MAX_PATH_LENGTH) {
-        console.warn(`[vite-plugin-ops] Path too long (${id.length} chars), skipping: ${id.slice(0, 50)}...`)
-        return false
-      }
-      return pkg.test(id)
-    }
-  }
-
-  // 检查缓存
-  let re = patternCache.get(pkg)
-  if (!re) {
-    // Scoped packages like @vueuse
-    const scoped = pkg.startsWith('@')
-    // 修复：添加对 / 的转义
-    const escaped = pkg.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')
-    const base = scoped ? escaped : `(?:@[^/]+/)?${escaped}`
-    re = new RegExp(`/node_modules/(?:[.]pnpm/)?(?:${base})(?:/|@|$)`, 'i')
-    patternCache.set(pkg, re)
-  }
-
-  // ReDoS 防护：限制输入长度
-  return (id: string) => {
-    if (id.length > MAX_PATH_LENGTH) {
-      console.warn(`[vite-plugin-ops] Path too long (${id.length} chars), skipping: ${id.slice(0, 50)}...`)
-      return false
-    }
-    return re.test(id)
-  }
-}
-
-// 简单的运行时类型验证函数
-function isValidPackageJson(obj: unknown): obj is { dependencies?: Record<string, string> } {
-  if (typeof obj !== 'object' || obj === null) return false
-  const json = obj as Record<string, unknown>
-  if (json.dependencies !== undefined) {
-    if (typeof json.dependencies !== 'object' || json.dependencies === null) return false
-    for (const val of Object.values(json.dependencies)) {
-      if (typeof val !== 'string') return false
-    }
-  }
-  return true
-}
-
-function readProjectDependencies(cwd: string): Set<string> {
-  try {
-    const pkgPath = path.join(cwd, 'package.json')
-    const content = fs.readFileSync(pkgPath, 'utf8')
-    const json: unknown = JSON.parse(content)
-
-    // 运行时类型验证
-    if (!isValidPackageJson(json)) {
-      console.warn('[vite-plugin-ops] Invalid package.json format: dependencies field is malformed')
-      return new Set<string>()
-    }
-
-    return new Set(Object.keys(json.dependencies || {}))
-  } catch (error) {
-    // 增强错误处理：根据错误类型提供更详细的日志
-    if (error instanceof SyntaxError) {
-      console.warn('[vite-plugin-ops] Failed to parse package.json: Invalid JSON format')
-    } else if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      console.warn('[vite-plugin-ops] package.json not found in:', cwd)
-    } else if (process.env.DEBUG) {
-      console.warn('[vite-plugin-ops] Failed to read package.json:', error)
-    }
-    return new Set<string>()
-  }
-}
-
-function buildGroupMatchers(
-  options: Pick<OPSOptions, 'groups' | 'strategy' | 'minSize'>,
-  projectDeps: Set<string>,
-  pluginHints: Set<string>
-): GroupMatcher[] {
-  const matchers: GroupMatcher[] = []
-  const strategy = options.strategy || 'balanced'
-
-  // Priority: higher number = checked first
-  // Custom groups (priority 100)
-  if (options.groups) {
-    for (const [name, patterns] of Object.entries(options.groups)) {
-      if (patterns && patterns.length) {
-        const sorted = patterns.slice().sort((a, b) => {
-          const la = typeof a === 'string' ? a.length : 0
-          const lb = typeof b === 'string' ? b.length : 0
-          return lb - la
-        })
-        const testers = sorted.map(makeNodeModulesPattern)
-        matchers.push({
-          name,
-          test: (id) => testers.some((t) => t(id)),
-          priority: 100
-        })
-      }
-    }
-  }
-
-  // Plugin-detected groups (priority 90)
-  const detectedGroups: Record<string, string[]> = {}
-  if (pluginHints.has('vue')) {
-    detectedGroups['vue'] = ['vue', '@vue/']
-  }
-  if (pluginHints.has('vueuse')) {
-    detectedGroups['vueuse'] = ['@vueuse/']
-  }
-
-  for (const [name, patterns] of Object.entries(detectedGroups)) {
-    const testers = patterns.map(makeNodeModulesPattern)
-    matchers.push({
-      name,
-      test: (id) => testers.some((t) => t(id)),
-      priority: 90
-    })
-  }
-
-  // Strategy-based splitting
-  if (strategy === 'aggressive') {
-    // Split all dependencies individually (priority 50)
-    for (const dep of projectDeps) {
-      if (!dep.startsWith('@types/')) {
-        matchers.push({
-          name: dep,
-          test: makeNodeModulesPattern(dep),
-          priority: 50
-        })
-      }
-    }
-  } else if (strategy === 'balanced') {
-    // Split common large libraries (priority 80)
-    for (const [groupName, patterns] of Object.entries(COMMON_LARGE_LIBS)) {
-      const hasAny = patterns.some(p => {
-        const pkgName = p.replace(/\//g, '')
-        return Array.from(projectDeps).some(dep => dep.includes(pkgName))
-      })
-      if (hasAny) {
-        const testers = patterns.map(makeNodeModulesPattern)
-        matchers.push({
-          name: groupName,
-          test: (id) => testers.some((t) => t(id)),
-          priority: 80
-        })
-      }
-    }
-
-    // Group medium libraries together (priority 70)
-    for (const [groupName, patterns] of Object.entries(MEDIUM_LIB_GROUPS)) {
-      const hasAny = patterns.some(p => {
-        return Array.from(projectDeps).some(dep =>
-          dep.includes(p.replace(/\//g, '').replace(/\*/g, ''))
-        )
-      })
-      if (hasAny) {
-        const testers = patterns.map(makeNodeModulesPattern)
-        matchers.push({
-          name: groupName,
-          test: (id) => testers.some((t) => t(id)),
-          priority: 70
-        })
-      }
-    }
-  } else if (strategy === 'conservative') {
-    // Only split very large libraries (priority 80)
-    const veryLargeLibs = ['react', 'vue', 'angular', 'antd', 'element-plus', 'echarts', 'three']
-    for (const [groupName, patterns] of Object.entries(COMMON_LARGE_LIBS)) {
-      if (veryLargeLibs.includes(groupName)) {
-        const hasAny = patterns.some(p => {
-          const pkgName = p.replace(/\//g, '')
-          return Array.from(projectDeps).some(dep => dep.includes(pkgName))
-        })
-        if (hasAny) {
-          const testers = patterns.map(makeNodeModulesPattern)
-          matchers.push({
-            name: groupName,
-            test: (id) => testers.some((t) => t(id)),
-            priority: 80
-          })
-        }
-      }
-    }
-  }
-
-  // Sort by priority (descending)
-  return matchers.sort((a, b) => b.priority - a.priority)
-}
-
-// Extract types from Vite's UserConfig
-type OutputOptions =
-  NonNullable<NonNullable<UserConfig['build']>['rollupOptions']>['output'] extends infer O
-  ? O extends any[]
-  ? O[number]
-  : O
-  : never
-
-type ManualChunksOption = NonNullable<OutputOptions>['manualChunks']
-type AssetFileNamesOption = NonNullable<OutputOptions>['assetFileNames']
-
+/**
+ * OPS - Optimized Packaging Strategy
+ * 一个智能的 Vite 分包优化插件
+ */
 export default function OPS(opts: OPSOptions = {}): Plugin {
   const options: ResolvedOptions = {
     override: opts.override ?? false,
@@ -353,17 +57,17 @@ export default function OPS(opts: OPSOptions = {}): Plugin {
         manualChunks,
       } as const
 
-      let output: OutputOptions
-      if (shouldMerge) {
-        const base = existingOutput as Record<string, any>
-        const merged: Record<string, any> = { ...base }
-        if (!('entryFileNames' in merged)) merged['entryFileNames'] = injected.entryFileNames
-        if (!('chunkFileNames' in merged)) merged['chunkFileNames'] = injected.chunkFileNames
-        if (!('assetFileNames' in merged)) merged['assetFileNames'] = injected.assetFileNames
-        if (!('manualChunks' in merged)) merged['manualChunks'] = injected.manualChunks
-        output = merged as OutputOptions
+      let output: typeof injected
+      if (shouldMerge && existingOutput) {
+        // 安全合并：只填充用户未提供的字段
+        output = {
+          entryFileNames: existingOutput.entryFileNames ?? injected.entryFileNames,
+          chunkFileNames: existingOutput.chunkFileNames ?? injected.chunkFileNames,
+          assetFileNames: existingOutput.assetFileNames ?? injected.assetFileNames,
+          manualChunks: existingOutput.manualChunks ?? injected.manualChunks,
+        }
       } else {
-        output = injected as OutputOptions
+        output = injected
       }
 
       return {
@@ -390,9 +94,9 @@ export default function OPS(opts: OPSOptions = {}): Plugin {
 
       groupsRef = buildGroupMatchers(options, projectDeps, hints)
 
-      // Log chunking strategy in dev mode
+      // Log chunking strategy in build mode
       if (resolved.command === 'build') {
-        const strategyDesc = {
+        const strategyDesc: Record<string, string> = {
           aggressive: 'Aggressive (split most dependencies)',
           balanced: 'Balanced (split large libraries)',
           conservative: 'Conservative (minimal splitting)'
