@@ -1,9 +1,17 @@
-import type { Plugin } from 'vite'
+import type { Plugin, UserConfig } from 'vite'
 import type { OPSOptions, ResolvedOptions, ManualChunksOption, AssetFileNamesOption, GroupMatcher } from './types'
 import { readProjectDependencies } from './deps'
-import { normalizeId, buildGroupMatchers } from './matcher'
+import { normalizeId, buildGroupMatchers, logger } from './matcher'
 
 export type { OPSPlugin, OPSOptions, SplitStrategy, ResolvedOptions, GroupMatcher } from './types'
+
+// Extract types from Vite's UserConfig
+type OutputOptions =
+  NonNullable<NonNullable<UserConfig['build']>['rollupOptions']>['output'] extends infer O
+  ? O extends any[]
+  ? O[number]
+  : O
+  : never
 
 /**
  * OPS - Optimized Packaging Strategy
@@ -20,26 +28,38 @@ export default function OPS(opts: OPSOptions = {}): Plugin {
   let groupsRef: GroupMatcher[] = []
 
   const manualChunks: ManualChunksOption = (id: string): string | undefined => {
-    const nid = normalizeId(id)
-    if (!/\/node_modules\//.test(nid)) return undefined
+    try {
+      const nid = normalizeId(id)
+      if (!/\/node_modules\//.test(nid)) return undefined
 
-    // Check matchers in priority order
-    for (const g of groupsRef) {
-      if (g.test(nid)) return g.name
+      // Check matchers in priority order
+      for (const g of groupsRef) {
+        if (g.test(nid)) return g.name
+      }
+
+      return 'vendor'
+    } catch (error) {
+      logger.warn(`Error in manualChunks for ${id}: ${error}`)
+      return 'vendor'
     }
-
-    return 'vendor'
   }
 
   const assetFileNamesFn: AssetFileNamesOption = (assetInfo) => {
-    const name = assetInfo.name ?? ''
-    const ext = name.split('.').pop()?.toLowerCase()
-    if (ext === 'css') return 'css/[name]-[hash][extname]'
-    if (['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'avif'].includes(ext ?? ''))
-      return 'img/[name]-[hash][extname]'
-    if (['woff', 'woff2', 'eot', 'ttf', 'otf'].includes(ext ?? ''))
-      return 'fonts/[name]-[hash][extname]'
-    return 'assets/[name]-[hash][extname]'
+    try {
+      const name = assetInfo.name ?? ''
+      const ext = name.split('.').pop()?.toLowerCase()
+      
+      if (ext === 'css') return 'css/[name]-[hash][extname]'
+      if (['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'avif'].includes(ext ?? ''))
+        return 'img/[name]-[hash][extname]'
+      if (['woff', 'woff2', 'eot', 'ttf', 'otf'].includes(ext ?? ''))
+        return 'fonts/[name]-[hash][extname]'
+      
+      return 'assets/[name]-[hash][extname]'
+    } catch (error) {
+      logger.warn(`Error in assetFileNames: ${error}`)
+      return 'assets/[name]-[hash][extname]'
+    }
   }
 
   return {
@@ -51,20 +71,22 @@ export default function OPS(opts: OPSOptions = {}): Plugin {
       const shouldMerge = !options.override && existingOutput && !outputIsArray
 
       const injected = {
-        entryFileNames: 'js/[name]-[hash].js',
-        chunkFileNames: 'js/[name]-[hash].js',
+        entryFileNames: 'js/[name]-[hash].js' as const,
+        chunkFileNames: 'js/[name]-[hash].js' as const,
         assetFileNames: assetFileNamesFn,
         manualChunks,
-      } as const
+      }
 
       let output: typeof injected
+      
       if (shouldMerge && existingOutput) {
         // 安全合并：只填充用户未提供的字段
+        const existing = existingOutput as OutputOptions
         output = {
-          entryFileNames: existingOutput.entryFileNames ?? injected.entryFileNames,
-          chunkFileNames: existingOutput.chunkFileNames ?? injected.chunkFileNames,
-          assetFileNames: existingOutput.assetFileNames ?? injected.assetFileNames,
-          manualChunks: existingOutput.manualChunks ?? injected.manualChunks,
+          entryFileNames: existing?.entryFileNames as typeof injected.entryFileNames ?? injected.entryFileNames,
+          chunkFileNames: existing?.chunkFileNames as typeof injected.chunkFileNames ?? injected.chunkFileNames,
+          assetFileNames: existing?.assetFileNames as typeof injected.assetFileNames ?? injected.assetFileNames,
+          manualChunks: existing?.manualChunks as typeof injected.manualChunks ?? injected.manualChunks,
         }
       } else {
         output = injected
@@ -85,6 +107,7 @@ export default function OPS(opts: OPSOptions = {}): Plugin {
       // Detect framework from plugins
       const pluginNames = new Set(resolved.plugins.map((p) => p.name))
       const hints = new Set<string>()
+      
       if (pluginNames.has('vite:vue') || pluginNames.has('vite:vue-jsx')) {
         hints.add('vue')
       }

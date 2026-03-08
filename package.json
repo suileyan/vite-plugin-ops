@@ -1,11 +1,10 @@
 {
   "name": "vite-plugin-ops",
-  "version": "0.2.0-beta.1",
+  "version": "1.0.0",
   "description": "Vite plugin to organize build outputs and vendor chunking.",
   "type": "module",
   "license": "MIT",
   "author": "suileyan",
-
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -16,35 +15,46 @@
   },
   "main": "dist/index.cjs",
   "types": "dist/index.d.ts",
-
-  "files": ["dist", "README.md", "LICENSE"],
-
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
   "sideEffects": false,
   "engines": {
     "node": ">=20.19"
   },
-
-  "keywords": ["vite", "vite-plugin", "rollup", "chunks", "vendor", "build"],
-
-  "repository": { "type": "git", "url": "git+https://github.com/suileyan/vite-plugin-ops.git" },
-  "bugs": { "url": "https://github.com/suileyan/vite-plugin-ops/issues" },
+  "keywords": [
+    "vite",
+    "vite-plugin",
+    "rollup",
+    "chunks",
+    "vendor",
+    "build"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/suileyan/vite-plugin-ops.git"
+  },
+  "bugs": {
+    "url": "https://github.com/suileyan/vite-plugin-ops/issues"
+  },
   "homepage": "https://github.com/suileyan/vite-plugin-ops#readme",
-
   "peerDependencies": {
     "vite": "^5.0.0 || ^6.0.0 || ^7.0.0"
   },
   "devDependencies": {
     "@types/node": "^24.6.0",
     "rimraf": "^6.0.1",
+    "rollup": "^4.0.0",
     "tsup": "^8.5.0",
     "typescript": "^5.9.2",
     "vite": "^7.3.1",
-    "rollup": "^4.0.0",
     "vitest": "^3.0.0"
   },
-
   "scripts": {
-    "build": "tsup",
+    "build": "tsup && tsc --emitDeclarationOnly --declaration --outDir dist",
+    "build:js": "tsup",
     "dev": "tsup --watch --sourcemap",
     "clean": "rimraf dist || rmdir /s /q dist",
     "prepublishOnly": "npm run clean && npm run build",
@@ -52,7 +62,6 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage"
   },
-
   "publishConfig": {
     "access": "public",
     "registry": "https://registry.npmjs.org/"

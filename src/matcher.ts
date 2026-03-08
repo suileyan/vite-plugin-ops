@@ -2,14 +2,43 @@ import type { GroupMatcher, ResolvedOptions } from './types'
 import { COMMON_LARGE_LIBS, MEDIUM_LIB_GROUPS, VERY_LARGE_LIBS } from './presets'
 import { hasDependencyMatch } from './deps'
 
-// 安全限制常量
+// ============ 常量定义 ============
+
+/**
+ * 优先级常量：确保分组匹配的优先级顺序
+ */
+export const PRIORITIES = {
+  CUSTOM: 100,      // 用户自定义分组
+  DETECTED: 90,     // 插件检测到的框架
+  LARGE_LIB: 80,    // 大型库
+  MEDIUM_LIB: 70,   // 中型库
+  ALL_DEPS: 50      // 所有依赖（aggressive 模式）
+} as const
+
+/**
+ * 安全限制常量
+ */
 const MAX_PATH_LENGTH = 2000
 const MAX_CACHE_SIZE = 100
 
-// 缓存：存储编译后的正则表达式
+// ============ 缓存系统 ============
+
+/**
+ * 缓存：存储编译后的正则表达式
+ */
 const patternCache = new Map<string, RegExp>()
-// LRU 缓存键顺序
 const cacheKeys: string[] = []
+
+/**
+ * 统一的日志系统
+ */
+const logger = {
+  warn: (msg: string) => console.warn(`[vite-plugin-ops] ${msg}`),
+  error: (msg: string) => console.error(`[vite-plugin-ops] ERROR: ${msg}`),
+  debug: (msg: string) => process.env.DEBUG && console.log(`[vite-plugin-ops] DEBUG: ${msg}`)
+}
+
+// ============ 工具函数 ============
 
 /**
  * 路径标准化：统一使用正斜杠
@@ -40,7 +69,7 @@ export function makeNodeModulesPattern(pkg: string | RegExp): (id: string) => bo
     // ReDoS 防护：限制输入长度
     return (id: string) => {
       if (id.length > MAX_PATH_LENGTH) {
-        console.warn(`[vite-plugin-ops] Path too long (${id.length} chars), skipping: ${id.slice(0, 50)}...`)
+        logger.warn(`Path too long (${id.length} chars), skipping: ${id.slice(0, 50)}...`)
         return false
       }
       return pkg.test(id)
@@ -57,7 +86,10 @@ export function makeNodeModulesPattern(pkg: string | RegExp): (id: string) => bo
     // 转义特殊字符，包括 /
     const escaped = pkg.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')
     const base = scoped ? escaped : `(?:@[^/]+/)?${escaped}`
-    re = new RegExp(`/node_modules/(?:[.]pnpm/)?(?:${base})(?:/|@|$)`, 'i')
+    
+    // 优化：Windows 系统需要不区分大小写，其他系统可以区分大小写以提升性能
+    const flags = process.platform === 'win32' ? 'i' : ''
+    re = new RegExp(`/node_modules/(?:[.]pnpm/)?(?:${base})(?:/|@|$)`, flags)
     
     patternCache.set(pkg, re)
     cacheKeys.push(pkg)
@@ -66,7 +98,7 @@ export function makeNodeModulesPattern(pkg: string | RegExp): (id: string) => bo
   // ReDoS 防护：限制输入长度
   return (id: string) => {
     if (id.length > MAX_PATH_LENGTH) {
-      console.warn(`[vite-plugin-ops] Path too long (${id.length} chars), skipping: ${id.slice(0, 50)}...`)
+      logger.warn(`Path too long (${id.length} chars), skipping: ${id.slice(0, 50)}...`)
       return false
     }
     return re!.test(id)
@@ -91,7 +123,7 @@ export function buildGroupMatchers(
   // 性能优化：只转换一次
   const depsArray = Array.from(projectDeps)
 
-  // Priority 100: Custom groups (用户自定义分组)
+  // Priority CUSTOM: Custom groups (用户自定义分组)
   if (options.groups) {
     for (const [name, patterns] of Object.entries(options.groups)) {
       if (patterns && patterns.length) {
@@ -105,13 +137,13 @@ export function buildGroupMatchers(
         matchers.push({
           name,
           test: (id) => testers.some((t) => t(id)),
-          priority: 100
+          priority: PRIORITIES.CUSTOM
         })
       }
     }
   }
 
-  // Priority 90: Plugin-detected groups (插件检测到的框架)
+  // Priority DETECTED: Plugin-detected groups (插件检测到的框架)
   const detectedGroups: Record<string, string[]> = {}
   if (pluginHints.has('vue')) {
     detectedGroups['vue'] = ['vue', '@vue/']
@@ -125,48 +157,48 @@ export function buildGroupMatchers(
     matchers.push({
       name,
       test: (id) => testers.some((t) => t(id)),
-      priority: 90
+      priority: PRIORITIES.DETECTED
     })
   }
 
   // Strategy-based splitting (基于策略的分组)
   if (strategy === 'aggressive') {
-    // Priority 50: Split all dependencies individually
+    // Priority ALL_DEPS: Split all dependencies individually
     for (const dep of depsArray) {
       if (!dep.startsWith('@types/')) {
         matchers.push({
           name: dep,
           test: makeNodeModulesPattern(dep),
-          priority: 50
+          priority: PRIORITIES.ALL_DEPS
         })
       }
     }
   } else if (strategy === 'balanced') {
-    // Priority 80: Split common large libraries
+    // Priority LARGE_LIB: Split common large libraries
     for (const [groupName, patterns] of Object.entries(COMMON_LARGE_LIBS)) {
       if (hasDependencyMatch(patterns, depsArray)) {
         const testers = patterns.map(makeNodeModulesPattern)
         matchers.push({
           name: groupName,
           test: (id) => testers.some((t) => t(id)),
-          priority: 80
+          priority: PRIORITIES.LARGE_LIB
         })
       }
     }
 
-    // Priority 70: Group medium libraries together
+    // Priority MEDIUM_LIB: Group medium libraries together
     for (const [groupName, patterns] of Object.entries(MEDIUM_LIB_GROUPS)) {
       if (hasDependencyMatch(patterns, depsArray)) {
         const testers = patterns.map(makeNodeModulesPattern)
         matchers.push({
           name: groupName,
           test: (id) => testers.some((t) => t(id)),
-          priority: 70
+          priority: PRIORITIES.MEDIUM_LIB
         })
       }
     }
   } else if (strategy === 'conservative') {
-    // Priority 80: Only split very large libraries
+    // Priority LARGE_LIB: Only split very large libraries
     for (const [groupName, patterns] of Object.entries(COMMON_LARGE_LIBS)) {
       if (VERY_LARGE_LIBS.includes(groupName as typeof VERY_LARGE_LIBS[number])) {
         if (hasDependencyMatch(patterns, depsArray)) {
@@ -174,7 +206,7 @@ export function buildGroupMatchers(
           matchers.push({
             name: groupName,
             test: (id) => testers.some((t) => t(id)),
-            priority: 80
+            priority: PRIORITIES.LARGE_LIB
           })
         }
       }
@@ -192,3 +224,6 @@ export function clearCache(): void {
   patternCache.clear()
   cacheKeys.length = 0
 }
+
+// 导出日志系统供其他模块使用
+export { logger }

@@ -6,9 +6,7 @@
     "strict": true,
     "declaration": true,
     "declarationMap": true,
-    "emitDeclarationOnly": false,
     "skipLibCheck": true,
-    "jsx": "react-jsx",
     "outDir": "dist",
     "types": ["node"]
   },
